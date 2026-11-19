@@ -11,6 +11,7 @@ const API='https://stark-empire-api.stark-empire-777.workers.dev/api/game';
 const tg=window.Telegram?.WebApp;tg?.ready();tg?.expand?.();
 // Read Telegram authorization at request time, not only during initial page load.
 function getInitData(){return window.Telegram?.WebApp?.initData || ''}
+// Always read fresh initData from Telegram at request time.
 const initData=getInitData();
 // Never log or display initData: it contains sensitive Telegram authorization data.
 function telegramContext(){const w=window.Telegram?.WebApp;return {sdk:!!w,hasInitData:!!w?.initData,platform:w?.platform||'unknown',version:w?.version||'unknown'};}
@@ -23,7 +24,7 @@ async function api(action,game){
   catch(e){throw Error('Сетевая ошибка или CORS: '+e.message)}
   const raw=await res.text();let json;
   try{json=JSON.parse(raw)}catch{throw Error('HTTP '+res.status+': сервер вернул не JSON')}
-  if(!res.ok){const code=json.code||'';if(res.status===401&&code==='SIGNATURE_MISMATCH')throw Error('HTTP 401 [SIGNATURE_MISMATCH]: сервер отклонил подпись Telegram. Проверь, что TELEGRAM_BOT_TOKEN в Cloudflare принадлежит именно боту, открывающему игру, и что Worker проверяет исходный initData.');throw Error('HTTP '+res.status+': '+(json.error||'ошибка сервера')+(code?' ['+code+']':''));}
+  if(!res.ok){const code=json.code||'';if(res.status===401&&code==='SIGNATURE_MISMATCH')throw Error('HTTP 401 [SIGNATURE_MISMATCH]: Telegram-подпись не совпала. HTML отправляет исходный initData; проверь серверную проверку подписи и соответствие бота без публикации токена.');throw Error('HTTP '+res.status+': '+(json.error||'ошибка сервера')+(code?' ['+code+']':''));}
   return json;
 }
 function cloudGame(){return {money:Math.max(0,Math.floor(data.money)),income:rate(),buildings:{plots:data.plots,last:data.last},level:1}}
@@ -52,8 +53,10 @@ async function initCloud(){
     const elapsed=Math.min(3600,Math.max(0,(Date.now()-data.last)/1000));
     data.money+=rate()*elapsed;data.last=Date.now();
     buildingGroups.forEach((g,i)=>build(i));update();if(selected>=0)select(selected);
-    save();cloudReady=true;markChanged();
-    cloudLabel('☁️ Подключено к облаку');await pushCloud();
+    // Remote load is not a user change; do not overwrite it immediately.
+    try{localStorage.setItem(KEY,JSON.stringify(data))}catch{}
+    cloudReady=true;dirty=false;cloudError=false;
+    cloudLabel('☁️ Подключено к облаку');
   }catch(e){cloudDiagnostic=e.message;cloudLabel('⚠️ Ошибка облака: '+e.message+' · локальный прогресс сохранён. Проверь настройки бота и Worker.');console.warn('Cloud load:',e.message,'Telegram context:',telegramContext())}
 }
 
@@ -120,5 +123,5 @@ function rate(){return data.plots.reduce((sum,p)=>sum+(p?types[p.type].income*p.
 function select(i){selected=i;plotMeshes.forEach((m,j)=>m.material=j===i?mats.selected:mats.lot);const p=data.plots[i];$('selectionTitle').textContent='Участок №'+(i+1);$('selectionInfo').textContent=p?`${types[p.type].name} • уровень ${p.level} • доход ${fmt(types[p.type].income*p.level)}/сек`:'Свободная земля. Выбери предприятие для строительства.';const actions=$('actions');actions.replaceChildren();if(!p){types.forEach((t,k)=>{const b=document.createElement('button');b.innerHTML=`${t.name}<span>${fmt(t.price)} · +${fmt(t.income)}/сек</span>`;b.disabled=(!!initData&&!cloudReady)||data.money<t.price;b.onclick=()=>{if(data.money<t.price)return;data.money-=t.price;data.plots[i]={type:k,level:1};build(i);save();update();select(i);status('🏗️ Здание построено!')};actions.append(b)})}else{const cost=Math.round(types[p.type].price*(1+p.level)*.75),b=document.createElement('button');b.className='primary';b.innerHTML=`⬆️ Улучшить до уровня ${p.level+1}<span>Стоимость ${fmt(cost)} · доход +${fmt(types[p.type].income)}/сек</span>`;b.disabled=(!!initData&&!cloudReady)||data.money<cost;b.onclick=()=>{if(data.money<cost)return;data.money-=cost;p.level++;build(i);save();update();select(i);status('✨ Предприятие улучшено!')};actions.append(b)}}
 $('retryCloud').onclick=()=>{if(cloudReady){cloudLabel('☁️ Уже подключено');return}initCloud()};
 $('resetSave').onclick=()=>{if(initData&&!cloudReady){status('Сначала дождись подключения к облаку');return}if(!confirm('Начать новую игру? При включённой синхронизации прогресс будет сброшен и в облаке.'))return;data={money:5000,plots:Array(16).fill(null),last:Date.now()};buildingGroups.forEach(g=>g.clear());selected=-1;plotMeshes.forEach(m=>m.material=mats.lot);$('selectionTitle').textContent='Выбери участок';$('selectionInfo').textContent='Нажми на зелёный участок.';$('actions').replaceChildren();save();update()};
-const now=Date.now(),offline=Math.min(3600,Math.max(0,(now-(Number(data.last)||now))/1000));data.money+=rate()*offline;data.plots.forEach((_,i)=>build(i));update();save();let last=performance.now(),saveTimer=0;function loop(t){requestAnimationFrame(loop);const dt=Math.min(.1,(t-last)/1000);last=t;if(!initData||cloudReady)data.money+=rate()*dt;for(const c of cars){const p=((t*.004+c.offset)%35)-17.5;if(c.axis==='x'){c.g.position.set(p,.04,c.lane);c.g.rotation.y=Math.PI/2}else{c.g.position.set(c.lane,.04,p);c.g.rotation.y=0}}saveTimer+=dt;cloudTimer+=dt;if(saveTimer>1){update();data.last=Date.now();try{localStorage.setItem(KEY,JSON.stringify(data))}catch{};saveTimer=0;if(selected>=0)select(selected)}if(cloudReady&&cloudTimer>15){cloudTimer=0;markChanged();pushCloud()}renderer.render(scene,camera)}requestAnimationFrame(loop);initCloud();document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')pushCloud()});
+const now=Date.now(),offline=Math.min(3600,Math.max(0,(now-(Number(data.last)||now))/1000));data.money+=rate()*offline;data.plots.forEach((_,i)=>build(i));update();save();let last=performance.now(),saveTimer=0;function loop(t){requestAnimationFrame(loop);const dt=Math.min(.1,(t-last)/1000);last=t;if(!initData||cloudReady)data.money+=rate()*dt;for(const c of cars){const p=((t*.004+c.offset)%35)-17.5;if(c.axis==='x'){c.g.position.set(p,.04,c.lane);c.g.rotation.y=Math.PI/2}else{c.g.position.set(c.lane,.04,p);c.g.rotation.y=0}}saveTimer+=dt;cloudTimer+=dt;if(saveTimer>1){update();data.last=Date.now();try{localStorage.setItem(KEY,JSON.stringify(data))}catch{};saveTimer=0;if(selected>=0)select(selected)}if(cloudReady&&cloudTimer>15){cloudTimer=0;if(rate()>0)markChanged();pushCloud()}renderer.render(scene,camera)}requestAnimationFrame(loop);initCloud();document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')pushCloud()});
 </script><script>window.addEventListener('error',e=>{if((e.message||'').includes('module')||(e.message||'').includes('import'))document.getElementById('error').style.display='block'});</script></body></html>
