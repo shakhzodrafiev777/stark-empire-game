@@ -1,6 +1,6 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0d1527"><title>STARK EMPIRE 3.6 Cloud Fix</title><style>
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0d1527"><title>STARK EMPIRE 3.7 Telegram Diagnostics</title><style>
 *{box-sizing:border-box}body{margin:0;background:#0d1527;color:#f4f7ff;font-family:system-ui,Arial,sans-serif}header{padding:16px 16px 12px;background:linear-gradient(130deg,#152744,#11192d)}h1{font-size:23px;letter-spacing:1px;margin:0;color:#ffd88b}small{color:#b8c8e5}.stats{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.pill{background:#273c5d;border:1px solid #415a7e;border-radius:22px;padding:8px 11px;font-weight:700;font-size:14px}#scene{height:clamp(320px,52vh,540px);position:relative;overflow:hidden;touch-action:none;background:linear-gradient(#8bc8ec,#e2f0ff)}canvas{display:block;width:100%;height:100%} @media(max-width:650px){header{padding:10px 12px}.stats{margin-top:8px}.pill{padding:6px 9px;font-size:12px}#scene{height:clamp(300px,47dvh,460px)}#hint{font-size:11px;max-width:190px;padding:7px}#controls button{padding:9px 11px}}#hint{position:absolute;left:10px;top:10px;background:#101b32d9;border-radius:12px;padding:9px;font-size:12px;max-width:260px;pointer-events:none}#controls{position:absolute;right:10px;bottom:10px;display:flex;gap:6px}button{background:#264467;color:white;border:1px solid #5676a2;border-radius:12px;padding:11px 13px;font-weight:700;cursor:pointer}button:disabled{opacity:.5}button.primary{background:#e6b65c;color:#192134;border:0}main{padding:14px;max-width:900px;margin:auto}.panel{background:#192a46;border:1px solid #385475;border-radius:18px;padding:15px;margin-bottom:12px}h2{font-size:19px;margin:0 0 9px}p{color:#c6d4ec;line-height:1.45}.actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.actions button{text-align:left;min-height:58px}.actions span{display:block;font-size:12px;font-weight:400;color:#cbd7ea;margin-top:4px}.muted{color:#9fb1ce}#status{font-size:13px;color:#c5dbfb;margin-top:9px}footer{padding:15px;color:#9cacc7;text-align:center;font-size:12px}#error{display:none;background:#56242a;padding:18px;color:white}</style></head><body>
-<header><h1>⚡ STARK EMPIRE 3.5</h1><small>Построй свой 3D-мегаполис</small><div class="stats"><div class="pill">💰 <span id="money">$5 000</span></div><div class="pill">📈 <span id="income">+$0/сек</span></div><div class="pill">🏙️ <span id="count">0/16</span></div></div></header>
+<header><h1>⚡ STARK EMPIRE 3.7</h1><small>Построй свой 3D-мегаполис</small><div class="stats"><div class="pill">💰 <span id="money">$5 000</span></div><div class="pill">📈 <span id="income">+$0/сек</span></div><div class="pill">🏙️ <span id="count">0/16</span></div></div></header>
 <div id="error">Не удалось загрузить 3D-движок. Проверь интернет и перезапусти игру.</div><div id="scene"><div id="hint">👆 Выбирай участок • двигай карту пальцем • +/− масштаб • 🌙 ночь</div><div id="controls"><button id="zoomIn" aria-label="Приблизить">＋</button><button id="zoomOut" aria-label="Отдалить">－</button><button id="resetCam">⟳</button><button id="dayNight" aria-label="Переключить день и ночь">🌙</button></div></div>
 <main><section class="panel"><h2 id="selectionTitle">Выбери участок</h2><p id="selectionInfo">Нажми на один из 16 зелёных участков в 3D-городе.</p><div id="actions" class="actions"></div><div id="status" aria-live="polite"></div></section><section class="panel"><h2>📊 Твоя империя</h2><p>Предприятий: <b id="bCount">0</b> · Доход в минуту: <b id="perMin">$0</b></p><p class="muted"><span id="cloudState">☁️ Подключение к облаку…</span></p><p class="muted" style="font-size:12px">Не открывай игру одновременно на двух устройствах: текущий сервер пока не защищает от конфликтов сохранения.</p><button id="retryCloud">🔄 Повторить подключение</button> <button id="resetSave">Начать новую игру</button></section></main><footer>STARK EMPIRE • 3D-прототип для Telegram Mini App • требуется интернет для Three.js</footer>
 <script src="https://telegram.org/js/telegram-web-app.js"></script><script type="module">
@@ -12,6 +12,8 @@ const tg=window.Telegram?.WebApp;tg?.ready();tg?.expand?.();
 // Read Telegram authorization at request time, not only during initial page load.
 function getInitData(){return window.Telegram?.WebApp?.initData || ''}
 const initData=getInitData();
+// Never log or display initData: it contains sensitive Telegram authorization data.
+function telegramContext(){const w=window.Telegram?.WebApp;return {sdk:!!w,hasInitData:!!w?.initData,platform:w?.platform||'unknown',version:w?.version||'unknown'};}
 let cloudReady=false, cloudBusy=false, dirty=false, cloudTimer=0, revision=0, cloudError=false;
 let cloudDiagnostic='';
 const cloudLabel=s=>{const el=document.getElementById('cloudState');if(el)el.textContent=s};
@@ -21,14 +23,14 @@ async function api(action,game){
   catch(e){throw Error('Сетевая ошибка или CORS: '+e.message)}
   const raw=await res.text();let json;
   try{json=JSON.parse(raw)}catch{throw Error('HTTP '+res.status+': сервер вернул не JSON')}
-  if(!res.ok)throw Error('HTTP '+res.status+': '+(json.error||'ошибка сервера')+(json.code?' ['+json.code+']':''));
+  if(!res.ok){const code=json.code||'';if(res.status===401&&code==='SIGNATURE_MISMATCH')throw Error('HTTP 401 [SIGNATURE_MISMATCH]: сервер отклонил подпись Telegram. Проверь, что TELEGRAM_BOT_TOKEN в Cloudflare принадлежит именно боту, открывающему игру, и что Worker проверяет исходный initData.');throw Error('HTTP '+res.status+': '+(json.error||'ошибка сервера')+(code?' ['+code+']':''));}
   return json;
 }
 function cloudGame(){return {money:Math.max(0,Math.floor(data.money)),income:rate(),buildings:{plots:data.plots,last:data.last},level:1}}
 function markChanged(){revision++;dirty=true;cloudTimer=0}
 async function pushCloud(){if(!cloudReady||cloudBusy||!dirty)return;cloudBusy=true;const sentRevision=revision;const snapshot=cloudGame();try{await api('save',snapshot);if(revision===sentRevision)dirty=false;cloudError=false;cloudLabel('☁️ Прогресс сохранён в облаке')}catch(e){cloudError=true;cloudLabel('⚠️ Ошибка сохранения: '+e.message+' · локальная копия сохранена');console.warn('Cloud save:',e)}finally{cloudBusy=false}}
 async function initCloud(){
-  if(!getInitData()){cloudLabel('⚠️ Telegram не передал initData. Запусти игру из кнопки Mini App бота.');return}
+  if(!getInitData()){cloudLabel('⚠️ Telegram не передал initData. Открой игру через кнопку Mini App своего бота (не через обычную ссылку).');return}
   cloudLabel('☁️ Проверяем Telegram и загружаем облачный прогресс…');
   try{
     const remote=await api('load');
@@ -52,7 +54,7 @@ async function initCloud(){
     buildingGroups.forEach((g,i)=>build(i));update();if(selected>=0)select(selected);
     save();cloudReady=true;markChanged();
     cloudLabel('☁️ Подключено к облаку');await pushCloud();
-  }catch(e){cloudDiagnostic=e.message;cloudLabel('⚠️ Ошибка облака: '+e.message+' · локальный прогресс сохранён. Проверь настройки бота и Worker.');console.warn('Cloud load:',e)}
+  }catch(e){cloudDiagnostic=e.message;cloudLabel('⚠️ Ошибка облака: '+e.message+' · локальный прогресс сохранён. Проверь настройки бота и Worker.');console.warn('Cloud load:',e.message,'Telegram context:',telegramContext())}
 }
 
 const types=[{name:'Киоск',price:500,income:2,color:0xf7a84a},{name:'Кафе',price:1500,income:6,color:0xd36c59},{name:'Офис',price:4000,income:17,color:0x60a9dc},{name:'Небоскрёб',price:12000,income:55,color:0x8e9be3}];
